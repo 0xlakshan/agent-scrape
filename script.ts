@@ -14,6 +14,9 @@ type SummaryOptions = {
   format?: 'paragraphs' | 'bullets' | 'json';
   includeMetadata?: boolean;
   saveToFile?: string;
+  batch?: boolean;
+  comparative?: boolean;
+  followLinks?: number;
 };
 
 type PageMetadata = {
@@ -26,6 +29,14 @@ type PageMetadata = {
 type PageContent = {
   text: string;
   metadata: PageMetadata;
+  links?: string[];
+};
+
+type BatchResult = {
+  url: string;
+  summary: string;
+  metadata: PageMetadata;
+  error?: string;
 };
 
 class SummarizerError extends Error {
@@ -35,8 +46,7 @@ class SummarizerError extends Error {
   }
 }
 
-const USER_AGENT =
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36';
+const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36';
 const MODEL = google('gemini-2.5-flash');
 
 function isValidUrl(urlString: string): boolean {
@@ -106,7 +116,6 @@ async function navigate(page: Page, url: string): Promise<void> {
     }
   } catch (error) {
     if (error instanceof SummarizerError) throw error;
-    
     if (error instanceof Error) {
       if (error.name === 'TimeoutError') {
         throw new SummarizerError(
@@ -130,6 +139,7 @@ async function extractMetadata(page: Page): Promise<PageMetadata> {
         document
           .querySelector(`meta[name="${name}"], meta[property="og:${name}"]`)
           ?.getAttribute('content') || '';
+
       return {
         title: document.title || getMeta('title'),
         description: getMeta('description'),
@@ -146,6 +156,31 @@ async function extractMetadata(page: Page): Promise<PageMetadata> {
       `Failed to extract metadata: ${error instanceof Error ? error.message : 'Unknown error'}`,
       'METADATA_EXTRACTION_FAILED'
     );
+  }
+}
+
+async function extractLinks(page: Page, baseUrl: string): Promise<string[]> {
+  try {
+    const links = await page.evaluate(() => {
+      return Array.from(document.querySelectorAll('a[href]'))
+        .map(a => (a as HTMLAnchorElement).href)
+        .filter(href => href && !href.startsWith('#'));
+    });
+
+    const base = new URL(baseUrl);
+    return [...new Set(links)]
+      .filter(link => {
+        try {
+          const url = new URL(link);
+          return url.hostname === base.hostname;
+        } catch {
+          return false;
+        }
+      })
+      .slice(0, 20);
+  } catch (error) {
+    console.warn('Failed to extract links:', error);
+    return [];
   }
 }
 
@@ -167,20 +202,9 @@ async function extractAndCleanText(page: Page): Promise<string> {
   try {
     const text = await page.evaluate(() => {
       const NOISE = [
-        'nav',
-        'footer',
-        'aside',
-        'script',
-        'style',
-        'noscript',
-        'iframe',
-        'header',
-        '[role="navigation"]',
-        '.cookie',
-        '.consent',
-        '.ads',
-        '.popup',
-        '.modal',
+        'nav', 'footer', 'aside', 'script', 'style', 'noscript', 'iframe',
+        'header', '[role="navigation"]', '.cookie', '.consent', '.ads',
+        '.popup', '.modal',
       ];
 
       NOISE.forEach((s) =>
@@ -188,11 +212,7 @@ async function extractAndCleanText(page: Page): Promise<string> {
       );
 
       const CANDIDATES = [
-        'article',
-        'main',
-        '[role="main"]',
-        '.content',
-        '.post',
+        'article', 'main', '[role="main"]', '.content', '.post',
       ];
 
       let best = '';
@@ -231,12 +251,9 @@ async function extractAndCleanText(page: Page): Promise<string> {
 }
 
 const summaryStrategies = {
-  paragraphs: (length: string) =>
-    `Provide a concise ${length} summary in paragraph form.`,
-  bullets: () =>
-    'Summarize as 5–7 concise bullet points covering the key ideas.',
-  json: () =>
-    'Return a JSON object with keys: "mainTopic", "keyPoints", "conclusion".',
+  paragraphs: (length: string) => `Provide a concise ${length} summary in paragraph form.`,
+  bullets: () => 'Summarize as 5–7 concise bullet points covering the key ideas.',
+  json: () => 'Return a JSON object with keys: "mainTopic", "keyPoints", "conclusion".',
 };
 
 function buildPrompt(content: string, options: SummaryOptions): string {
@@ -255,6 +272,25 @@ Focus on the core ideas and conclusions.
 
 Content:
 ${content}
+  `.trim();
+}
+
+function buildComparativePrompt(results: BatchResult[]): string {
+  const contents = results.map((r, i) => 
+    `Source ${i + 1} (${r.metadata.title || r.url}):\n${r.summary}`
+  ).join('\n\n---\n\n');
+
+  return `
+Compare and contrast the following summaries from different web pages. Identify:
+1. Common themes and overlapping topics
+2. Unique perspectives or information in each source
+3. Contradictions or differing viewpoints
+4. Overall synthesis of the information
+
+Sources:
+${contents}
+
+Provide a comparative analysis in clear paragraphs.
   `.trim();
 }
 
@@ -285,6 +321,29 @@ async function summarizeContent(
   }
 }
 
+async function generateComparativeSummary(results: BatchResult[]): Promise<string> {
+  try {
+    const { text } = await generateText({
+      model: MODEL,
+      prompt: buildComparativePrompt(results),
+    });
+
+    if (!text || text.trim().length === 0) {
+      throw new SummarizerError(
+        'AI model returned empty comparative summary',
+        'EMPTY_SUMMARY'
+      );
+    }
+
+    return text;
+  } catch (error) {
+    throw new SummarizerError(
+      `Failed to generate comparative summary: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      'COMPARATIVE_SUMMARY_FAILED'
+    );
+  }
+}
+
 function formatOutput(
   summary: string,
   data: PageContent,
@@ -304,6 +363,36 @@ function formatOutput(
 
   output += summary;
   output += '\n\n-----------------------\n';
+
+  return output;
+}
+
+function formatBatchOutput(results: BatchResult[], comparative?: string): string {
+  let output = '\n=== BATCH SUMMARY RESULTS ===\n\n';
+  output += `Total URLs processed: ${results.length}\n`;
+  output += `Successful: ${results.filter(r => !r.error).length}\n`;
+  output += `Failed: ${results.filter(r => r.error).length}\n\n`;
+
+  results.forEach((result, index) => {
+    output += `\n--- Summary ${index + 1} ---\n`;
+    output += `URL: ${result.url}\n`;
+    
+    if (result.error) {
+      output += `ERROR: ${result.error}\n`;
+    } else {
+      output += `Title: ${result.metadata.title}\n`;
+      output += `Date: ${new Date(result.metadata.timestamp).toLocaleString()}\n\n`;
+      output += result.summary;
+      output += '\n';
+    }
+    output += '\n' + '-'.repeat(50) + '\n';
+  });
+
+  if (comparative) {
+    output += '\n\n=== COMPARATIVE ANALYSIS ===\n\n';
+    output += comparative;
+    output += '\n\n' + '='.repeat(50) + '\n';
+  }
 
   return output;
 }
@@ -332,6 +421,32 @@ async function saveToFileIfNeeded(
   }
 }
 
+async function processUrl(url: string, options: SummaryOptions, ctx: BrowserContext): Promise<BatchResult> {
+  try {
+    await navigate(ctx.page, url);
+    
+    const [text, metadata] = await Promise.all([
+      extractAndCleanText(ctx.page),
+      extractMetadata(ctx.page),
+    ]);
+
+    const summary = await summarizeContent(text, options);
+
+    return {
+      url,
+      summary,
+      metadata,
+    };
+  } catch (error) {
+    return {
+      url,
+      summary: '',
+      metadata: { title: '', description: '', url, timestamp: new Date().toISOString() },
+      error: error instanceof Error ? error.message : 'Unknown error',
+    };
+  }
+}
+
 async function summarizeWebsite(url: string, options: SummaryOptions = {}) {
   if (!isValidUrl(url)) {
     throw new SummarizerError(
@@ -340,7 +455,7 @@ async function summarizeWebsite(url: string, options: SummaryOptions = {}) {
     );
   }
 
-  await withBrowser(async ({ page }) => {
+  await withBrowser(async ({ browser, page }) => {
     await navigate(page, url);
 
     const [text, metadata] = await Promise.all([
@@ -348,38 +463,123 @@ async function summarizeWebsite(url: string, options: SummaryOptions = {}) {
       extractMetadata(page),
     ]);
 
-    const summary = await summarizeContent(text, options);
-    const output = formatOutput(summary, { text, metadata }, options);
+    const links = options.followLinks ? await extractLinks(page, url) : [];
 
+    const summary = await summarizeContent(text, options);
+    const output = formatOutput(summary, { text, metadata, links }, options);
     console.log(output);
+
+    if (options.followLinks && links.length > 0) {
+      console.log(`\n📎 Found ${links.length} related links. Processing ${Math.min(links.length, options.followLinks)}...\n`);
+      
+      const linkResults: BatchResult[] = [];
+      const linksToProcess = links.slice(0, options.followLinks);
+
+      for (let i = 0; i < linksToProcess.length; i++) {
+        const link = linksToProcess[i];
+        console.log(`Processing link ${i + 1}/${linksToProcess.length}: ${link}`);
+        
+        const result = await processUrl(link, { ...options, includeMetadata: true }, { browser, page });
+        linkResults.push(result);
+        
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+
+      const batchOutput = formatBatchOutput(linkResults);
+      console.log(batchOutput);
+
+      if (options.saveToFile) {
+        const linkFilename = options.saveToFile.replace(/\.txt$/, '') + '_links.txt';
+        await saveToFileIfNeeded(batchOutput, { ...options, saveToFile: linkFilename });
+      }
+    }
+
     await saveToFileIfNeeded(output, options);
   });
 }
 
-function parseArgs(): { url: string; options: SummaryOptions } {
+async function summarizeBatch(urls: string[], options: SummaryOptions = {}) {
+  const results: BatchResult[] = [];
+
+  await withBrowser(async (ctx) => {
+    for (let i = 0; i < urls.length; i++) {
+      const url = urls[i];
+      console.log(`\nProcessing ${i + 1}/${urls.length}: ${url}`);
+
+      if (!isValidUrl(url)) {
+        results.push({
+          url,
+          summary: '',
+          metadata: { title: '', description: '', url, timestamp: new Date().toISOString() },
+          error: 'Invalid URL format',
+        });
+        continue;
+      }
+
+      const result = await processUrl(url, options, ctx);
+      results.push(result);
+
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+  });
+
+  let comparativeSummary: string | undefined;
+  if (options.comparative && results.filter(r => !r.error).length >= 2) {
+    console.log('\n🔄 Generating comparative analysis...\n');
+    comparativeSummary = await generateComparativeSummary(results.filter(r => !r.error));
+  }
+
+  const output = formatBatchOutput(results, comparativeSummary);
+  console.log(output);
+
+  await saveToFileIfNeeded(output, options);
+}
+
+async function loadUrlsFromFile(filepath: string): Promise<string[]> {
+  try {
+    const content = await fs.readFile(filepath, 'utf-8');
+    return content
+      .split('\n')
+      .map(line => line.trim())
+      .filter(line => line && !line.startsWith('#'));
+  } catch (error) {
+    throw new SummarizerError(
+      `Failed to read URL file: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      'FILE_READ_FAILED'
+    );
+  }
+}
+
+function parseArgs(): { urls: string[]; options: SummaryOptions } {
   const args = process.argv.slice(2);
 
   if (!args.length || args.includes('--help')) {
     console.log(`
-Usage: node summarizer.js <url> [options]
+Usage: node summarizer.js <url|file> [options]
 
 Options:
-  --length <short|medium|long>    Summary length (default: medium)
-  --format <paragraphs|bullets|json>  Output format (default: paragraphs)
-  --metadata                       Include page metadata
-  --save <filename>                Save summary to file
-  --help                           Show this help message
+  --length <type>        Summary length: short, medium, long (default: medium)
+  --format <type>        Output format: paragraphs, bullets, json (default: paragraphs)
+  --metadata             Include page metadata
+  --save <filename>      Save summary to file
+  --batch <file>         Process multiple URLs from a file
+  --comparative          Generate comparative analysis (batch mode only)
+  --follow <n>           Follow and summarize N internal links from the page
+  --help                 Show this help message
 
-Example:
-  node summarizer.js https://example.com --length short --metadata --save summary
+Examples:
+  node summarizer.js https://example.com --length short --metadata
+  node summarizer.js --batch urls.txt --comparative --save report
+  node summarizer.js https://example.com --follow 5 --save summary
     `);
     process.exit(0);
   }
 
-  const url = args[0];
   const options: SummaryOptions = {};
+  let urls: string[] = [];
+  let batchFile: string | null = null;
 
-  for (let i = 1; i < args.length; i++) {
+  for (let i = 0; i < args.length; i++) {
     switch (args[i]) {
       case '--length':
         if (i + 1 >= args.length) {
@@ -421,36 +621,75 @@ Example:
 
       case '--save':
         if (i + 1 >= args.length) {
-          throw new SummarizerError(
-            '--save requires a filename',
-            'INVALID_ARGS'
-          );
+          throw new SummarizerError('--save requires a filename', 'INVALID_ARGS');
         }
         options.saveToFile = args[++i];
         break;
 
+      case '--batch':
+        if (i + 1 >= args.length) {
+          throw new SummarizerError('--batch requires a filename', 'INVALID_ARGS');
+        }
+        batchFile = args[++i];
+        options.batch = true;
+        break;
+
+      case '--comparative':
+        options.comparative = true;
+        break;
+
+      case '--follow':
+        if (i + 1 >= args.length) {
+          throw new SummarizerError('--follow requires a number', 'INVALID_ARGS');
+        }
+        const count = parseInt(args[++i], 10);
+        if (isNaN(count) || count < 1 || count > 20) {
+          throw new SummarizerError(
+            'Follow count must be between 1 and 20',
+            'INVALID_ARGS'
+          );
+        }
+        options.followLinks = count;
+        break;
+
       default:
-        throw new SummarizerError(
-          `Unknown option: ${args[i]}. Use --help for usage information`,
-          'INVALID_ARGS'
-        );
+        if (!args[i].startsWith('--')) {
+          urls.push(args[i]);
+        } else {
+          throw new SummarizerError(
+            `Unknown option: ${args[i]}. Use --help for usage information`,
+            'INVALID_ARGS'
+          );
+        }
     }
   }
 
-  return { url, options };
+  return { urls: batchFile ? [batchFile] : urls, options };
 }
 
 (async () => {
   try {
-    const { url, options } = parseArgs();
-    await summarizeWebsite(url, options);
+    const { urls, options } = parseArgs();
+
+    if (options.batch && urls.length > 0) {
+      const urlList = await loadUrlsFromFile(urls[0]);
+      await summarizeBatch(urlList, options);
+    } else if (urls.length === 1) {
+      await summarizeWebsite(urls[0], options);
+    } else if (urls.length > 1) {
+      await summarizeBatch(urls, options);
+    } else {
+      throw new SummarizerError(
+        'No URL provided. Use --help for usage information',
+        'INVALID_ARGS'
+      );
+    }
   } catch (error) {
     if (error instanceof SummarizerError) {
-      console.error(`\n Error [${error.code}]: ${error.message}\n`);
+      console.error(`\n❌ Error [${error.code}]: ${error.message}\n`);
       process.exit(1);
     }
-    
-    console.error('\n Unexpected error:', error);
+    console.error('\n❌ Unexpected error:', error);
     process.exit(1);
   }
 })();
