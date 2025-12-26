@@ -17,6 +17,8 @@ type SummaryOptions = {
   batch?: boolean;
   comparative?: boolean;
   followLinks?: number;
+  maxRetries?: number;
+  retryDelay?: number;
 };
 
 type PageMetadata = {
@@ -37,14 +39,65 @@ type BatchResult = {
   summary: string;
   metadata: PageMetadata;
   error?: string;
+  retries?: number;
 };
 
 class SummarizerError extends Error {
-  constructor(message: string, public readonly code: string) {
+  constructor(message: string, public readonly code: string, public readonly retryable: boolean = false) {
     super(message);
     this.name = 'SummarizerError';
   }
 }
+
+class RateLimiter {
+  private queue: Array<() => Promise<void>> = [];
+  private running = 0;
+  private lastRequestTime = 0;
+
+  constructor(
+    private maxConcurrent: number = 1,
+    private minDelay: number = 1000
+  ) {}
+
+  async execute<T>(fn: () => Promise<T>): Promise<T> {
+    return new Promise((resolve, reject) => {
+      this.queue.push(async () => {
+        try {
+          const now = Date.now();
+          const timeSinceLastRequest = now - this.lastRequestTime;
+          if (timeSinceLastRequest < this.minDelay) {
+            await new Promise(r => setTimeout(r, this.minDelay - timeSinceLastRequest));
+          }
+          
+          this.lastRequestTime = Date.now();
+          const result = await fn();
+          resolve(result);
+        } catch (error) {
+          reject(error);
+        } finally {
+          this.running--;
+          this.processQueue();
+        }
+      });
+
+      this.processQueue();
+    });
+  }
+
+  private processQueue(): void {
+    if (this.running >= this.maxConcurrent || this.queue.length === 0) {
+      return;
+    }
+
+    this.running++;
+    const task = this.queue.shift();
+    if (task) {
+      task();
+    }
+  }
+}
+
+const rateLimiter = new RateLimiter(2, 1000);
 
 const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36';
 const MODEL = google('gemini-2.5-flash');
@@ -58,6 +111,41 @@ function isValidUrl(urlString: string): boolean {
   }
 }
 
+async function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function retryWithBackoff<T>(
+  fn: () => Promise<T>,
+  options: { maxRetries: number; baseDelay: number; operation: string }
+): Promise<T> {
+  let lastError: Error | undefined;
+  
+  for (let attempt = 0; attempt <= options.maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error as Error;
+      
+      if (error instanceof SummarizerError && !error.retryable) {
+        throw error;
+      }
+
+      if (attempt < options.maxRetries) {
+        const delay = options.baseDelay * Math.pow(2, attempt);
+        console.log(`⚠️  ${options.operation} failed (attempt ${attempt + 1}/${options.maxRetries + 1}). Retrying in ${delay}ms...`);
+        await sleep(delay);
+      }
+    }
+  }
+
+  throw new SummarizerError(
+    `${options.operation} failed after ${options.maxRetries + 1} attempts: ${lastError?.message}`,
+    'MAX_RETRIES_EXCEEDED',
+    false
+  );
+}
+
 async function createBrowserContext(): Promise<BrowserContext> {
   try {
     const browser = await puppeteer.launch({ headless: 'new' });
@@ -67,7 +155,8 @@ async function createBrowserContext(): Promise<BrowserContext> {
   } catch (error) {
     throw new SummarizerError(
       `Failed to launch browser: ${error instanceof Error ? error.message : 'Unknown error'}`,
-      'BROWSER_LAUNCH_FAILED'
+      'BROWSER_LAUNCH_FAILED',
+      false
     );
   }
 }
@@ -83,7 +172,8 @@ async function withBrowser<T>(
     if (error instanceof SummarizerError) throw error;
     throw new SummarizerError(
       `Browser operation failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
-      'BROWSER_OPERATION_FAILED'
+      'BROWSER_OPERATION_FAILED',
+      false
     );
   } finally {
     if (ctx?.browser) {
@@ -104,14 +194,29 @@ async function navigate(page: Page, url: string): Promise<void> {
     });
 
     if (!response) {
-      throw new SummarizerError('No response received from URL', 'NO_RESPONSE');
+      throw new SummarizerError('No response received from URL', 'NO_RESPONSE', true);
     }
 
     const status = response.status();
+    if (status === 429) {
+      throw new SummarizerError(
+        'Rate limited by server',
+        'RATE_LIMITED',
+        true
+      );
+    }
+    if (status >= 500) {
+      throw new SummarizerError(
+        `Server error ${status}: ${response.statusText()}`,
+        'SERVER_ERROR',
+        true
+      );
+    }
     if (status >= 400) {
       throw new SummarizerError(
         `HTTP error ${status}: ${response.statusText()}`,
-        'HTTP_ERROR'
+        'HTTP_ERROR',
+        false
       );
     }
   } catch (error) {
@@ -120,12 +225,14 @@ async function navigate(page: Page, url: string): Promise<void> {
       if (error.name === 'TimeoutError') {
         throw new SummarizerError(
           'Page load timeout - the website took too long to respond',
-          'TIMEOUT'
+          'TIMEOUT',
+          true
         );
       }
       throw new SummarizerError(
         `Failed to navigate to URL: ${error.message}`,
-        'NAVIGATION_FAILED'
+        'NAVIGATION_FAILED',
+        true
       );
     }
     throw error;
@@ -154,7 +261,8 @@ async function extractMetadata(page: Page): Promise<PageMetadata> {
   } catch (error) {
     throw new SummarizerError(
       `Failed to extract metadata: ${error instanceof Error ? error.message : 'Unknown error'}`,
-      'METADATA_EXTRACTION_FAILED'
+      'METADATA_EXTRACTION_FAILED',
+      true
     );
   }
 }
@@ -236,7 +344,8 @@ async function extractAndCleanText(page: Page): Promise<string> {
     if (!cleaned || cleaned.length < 50) {
       throw new SummarizerError(
         'No meaningful content found on the page',
-        'NO_CONTENT'
+        'NO_CONTENT',
+        false
       );
     }
 
@@ -245,7 +354,8 @@ async function extractAndCleanText(page: Page): Promise<string> {
     if (error instanceof SummarizerError) throw error;
     throw new SummarizerError(
       `Failed to extract text content: ${error instanceof Error ? error.message : 'Unknown error'}`,
-      'TEXT_EXTRACTION_FAILED'
+      'TEXT_EXTRACTION_FAILED',
+      true
     );
   }
 }
@@ -298,50 +408,59 @@ async function summarizeContent(
   content: string,
   options: SummaryOptions
 ): Promise<string> {
-  try {
-    const { text } = await generateText({
-      model: MODEL,
-      prompt: buildPrompt(content, options),
-    });
+  return rateLimiter.execute(async () => {
+    return retryWithBackoff(
+      async () => {
+        const { text } = await generateText({
+          model: MODEL,
+          prompt: buildPrompt(content, options),
+        });
 
-    if (!text || text.trim().length === 0) {
-      throw new SummarizerError(
-        'AI model returned empty response',
-        'EMPTY_SUMMARY'
-      );
-    }
+        if (!text || text.trim().length === 0) {
+          throw new SummarizerError(
+            'AI model returned empty response',
+            'EMPTY_SUMMARY',
+            true
+          );
+        }
 
-    return text;
-  } catch (error) {
-    if (error instanceof SummarizerError) throw error;
-    throw new SummarizerError(
-      `Failed to generate summary: ${error instanceof Error ? error.message : 'Unknown error'}`,
-      'SUMMARIZATION_FAILED'
+        return text;
+      },
+      {
+        maxRetries: options.maxRetries || 3,
+        baseDelay: options.retryDelay || 1000,
+        operation: 'Summarization'
+      }
     );
-  }
+  });
 }
 
-async function generateComparativeSummary(results: BatchResult[]): Promise<string> {
-  try {
-    const { text } = await generateText({
-      model: MODEL,
-      prompt: buildComparativePrompt(results),
-    });
+async function generateComparativeSummary(results: BatchResult[], options: SummaryOptions): Promise<string> {
+  return rateLimiter.execute(async () => {
+    return retryWithBackoff(
+      async () => {
+        const { text } = await generateText({
+          model: MODEL,
+          prompt: buildComparativePrompt(results),
+        });
 
-    if (!text || text.trim().length === 0) {
-      throw new SummarizerError(
-        'AI model returned empty comparative summary',
-        'EMPTY_SUMMARY'
-      );
-    }
+        if (!text || text.trim().length === 0) {
+          throw new SummarizerError(
+            'AI model returned empty comparative summary',
+            'EMPTY_SUMMARY',
+            true
+          );
+        }
 
-    return text;
-  } catch (error) {
-    throw new SummarizerError(
-      `Failed to generate comparative summary: ${error instanceof Error ? error.message : 'Unknown error'}`,
-      'COMPARATIVE_SUMMARY_FAILED'
+        return text;
+      },
+      {
+        maxRetries: options.maxRetries || 3,
+        baseDelay: options.retryDelay || 1000,
+        operation: 'Comparative summary'
+      }
     );
-  }
+  });
 }
 
 function formatOutput(
@@ -379,11 +498,16 @@ function formatBatchOutput(results: BatchResult[], comparative?: string): string
     
     if (result.error) {
       output += `ERROR: ${result.error}\n`;
+      if (result.retries) {
+        output += `Attempts: ${result.retries + 1}\n`;
+      }
     } else {
       output += `Title: ${result.metadata.title}\n`;
-      output += `Date: ${new Date(result.metadata.timestamp).toLocaleString()}\n\n`;
-      output += result.summary;
-      output += '\n';
+      output += `Date: ${new Date(result.metadata.timestamp).toLocaleString()}\n`;
+      if (result.retries) {
+        output += `Retries: ${result.retries}\n`;
+      }
+      output += `\n${result.summary}\n`;
     }
     output += '\n' + '-'.repeat(50) + '\n';
   });
@@ -416,51 +540,88 @@ async function saveToFileIfNeeded(
   } catch (error) {
     throw new SummarizerError(
       `Failed to save file: ${error instanceof Error ? error.message : 'Unknown error'}`,
-      'FILE_SAVE_FAILED'
+      'FILE_SAVE_FAILED',
+      false
     );
   }
 }
 
 async function processUrl(url: string, options: SummaryOptions, ctx: BrowserContext): Promise<BatchResult> {
-  try {
-    await navigate(ctx.page, url);
-    
-    const [text, metadata] = await Promise.all([
-      extractAndCleanText(ctx.page),
-      extractMetadata(ctx.page),
-    ]);
+  let retries = 0;
+  
+  return retryWithBackoff(
+    async () => {
+      try {
+        await navigate(ctx.page, url);
+        
+        const [text, metadata] = await Promise.all([
+          extractAndCleanText(ctx.page),
+          extractMetadata(ctx.page),
+        ]);
 
-    const summary = await summarizeContent(text, options);
+        const summary = await summarizeContent(text, options);
 
-    return {
-      url,
-      summary,
-      metadata,
-    };
-  } catch (error) {
-    return {
-      url,
-      summary: '',
-      metadata: { title: '', description: '', url, timestamp: new Date().toISOString() },
-      error: error instanceof Error ? error.message : 'Unknown error',
-    };
-  }
+        return {
+          url,
+          summary,
+          metadata,
+          retries: retries > 0 ? retries : undefined,
+        };
+      } catch (error) {
+        retries++;
+        throw error;
+      }
+    },
+    {
+      maxRetries: options.maxRetries || 3,
+      baseDelay: options.retryDelay || 2000,
+      operation: `Processing ${url}`
+    }
+  ).catch(error => ({
+    url,
+    summary: '',
+    metadata: { title: '', description: '', url, timestamp: new Date().toISOString() },
+    error: error instanceof Error ? error.message : 'Unknown error',
+    retries: retries > 0 ? retries : undefined,
+  }));
 }
 
 async function summarizeWebsite(url: string, options: SummaryOptions = {}) {
   if (!isValidUrl(url)) {
     throw new SummarizerError(
       'Invalid URL format. Please provide a valid http:// or https:// URL',
-      'INVALID_URL'
+      'INVALID_URL',
+      false
     );
   }
 
   await withBrowser(async ({ browser, page }) => {
-    await navigate(page, url);
+    await retryWithBackoff(
+      async () => navigate(page, url),
+      {
+        maxRetries: options.maxRetries || 3,
+        baseDelay: options.retryDelay || 2000,
+        operation: `Navigating to ${url}`
+      }
+    );
 
     const [text, metadata] = await Promise.all([
-      extractAndCleanText(page),
-      extractMetadata(page),
+      retryWithBackoff(
+        async () => extractAndCleanText(page),
+        {
+          maxRetries: options.maxRetries || 3,
+          baseDelay: options.retryDelay || 1000,
+          operation: 'Extracting text'
+        }
+      ),
+      retryWithBackoff(
+        async () => extractMetadata(page),
+        {
+          maxRetries: options.maxRetries || 3,
+          baseDelay: options.retryDelay || 1000,
+          operation: 'Extracting metadata'
+        }
+      ),
     ]);
 
     const links = options.followLinks ? await extractLinks(page, url) : [];
@@ -482,7 +643,7 @@ async function summarizeWebsite(url: string, options: SummaryOptions = {}) {
         const result = await processUrl(link, { ...options, includeMetadata: true }, { browser, page });
         linkResults.push(result);
         
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        await sleep(1000);
       }
 
       const batchOutput = formatBatchOutput(linkResults);
@@ -519,14 +680,14 @@ async function summarizeBatch(urls: string[], options: SummaryOptions = {}) {
       const result = await processUrl(url, options, ctx);
       results.push(result);
 
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      await sleep(1000);
     }
   });
 
   let comparativeSummary: string | undefined;
   if (options.comparative && results.filter(r => !r.error).length >= 2) {
     console.log('\n🔄 Generating comparative analysis...\n');
-    comparativeSummary = await generateComparativeSummary(results.filter(r => !r.error));
+    comparativeSummary = await generateComparativeSummary(results.filter(r => !r.error), options);
   }
 
   const output = formatBatchOutput(results, comparativeSummary);
@@ -545,7 +706,8 @@ async function loadUrlsFromFile(filepath: string): Promise<string[]> {
   } catch (error) {
     throw new SummarizerError(
       `Failed to read URL file: ${error instanceof Error ? error.message : 'Unknown error'}`,
-      'FILE_READ_FAILED'
+      'FILE_READ_FAILED',
+      false
     );
   }
 }
@@ -565,12 +727,15 @@ Options:
   --batch <file>         Process multiple URLs from a file
   --comparative          Generate comparative analysis (batch mode only)
   --follow <n>           Follow and summarize N internal links from the page
+  --max-retries <n>      Maximum retry attempts for failed requests (default: 3)
+  --retry-delay <ms>     Base delay between retries in milliseconds (default: 2000)
   --help                 Show this help message
 
 Examples:
   node summarizer.js https://example.com --length short --metadata
   node summarizer.js --batch urls.txt --comparative --save report
-  node summarizer.js https://example.com --follow 5 --save summary
+  node summarizer.js https://example.com --follow 5 --max-retries 5
+  node summarizer.js https://example.com --retry-delay 3000 --max-retries 2
     `);
     process.exit(0);
   }
@@ -585,14 +750,16 @@ Examples:
         if (i + 1 >= args.length) {
           throw new SummarizerError(
             '--length requires a value (short, medium, or long)',
-            'INVALID_ARGS'
+            'INVALID_ARGS',
+            false
           );
         }
         const length = args[++i];
         if (!['short', 'medium', 'long'].includes(length)) {
           throw new SummarizerError(
             `Invalid length: ${length}. Must be short, medium, or long`,
-            'INVALID_ARGS'
+            'INVALID_ARGS',
+            false
           );
         }
         options.length = length as SummaryOptions['length'];
@@ -602,14 +769,16 @@ Examples:
         if (i + 1 >= args.length) {
           throw new SummarizerError(
             '--format requires a value (paragraphs, bullets, or json)',
-            'INVALID_ARGS'
+            'INVALID_ARGS',
+            false
           );
         }
         const format = args[++i];
         if (!['paragraphs', 'bullets', 'json'].includes(format)) {
           throw new SummarizerError(
             `Invalid format: ${format}. Must be paragraphs, bullets, or json`,
-            'INVALID_ARGS'
+            'INVALID_ARGS',
+            false
           );
         }
         options.format = format as SummaryOptions['format'];
@@ -621,14 +790,14 @@ Examples:
 
       case '--save':
         if (i + 1 >= args.length) {
-          throw new SummarizerError('--save requires a filename', 'INVALID_ARGS');
+          throw new SummarizerError('--save requires a filename', 'INVALID_ARGS', false);
         }
         options.saveToFile = args[++i];
         break;
 
       case '--batch':
         if (i + 1 >= args.length) {
-          throw new SummarizerError('--batch requires a filename', 'INVALID_ARGS');
+          throw new SummarizerError('--batch requires a filename', 'INVALID_ARGS', false);
         }
         batchFile = args[++i];
         options.batch = true;
@@ -640,16 +809,47 @@ Examples:
 
       case '--follow':
         if (i + 1 >= args.length) {
-          throw new SummarizerError('--follow requires a number', 'INVALID_ARGS');
+          throw new SummarizerError('--follow requires a number', 'INVALID_ARGS', false);
         }
         const count = parseInt(args[++i], 10);
         if (isNaN(count) || count < 1 || count > 20) {
           throw new SummarizerError(
             'Follow count must be between 1 and 20',
-            'INVALID_ARGS'
+            'INVALID_ARGS',
+            false
           );
         }
         options.followLinks = count;
+        break;
+
+      case '--max-retries':
+        if (i + 1 >= args.length) {
+          throw new SummarizerError('--max-retries requires a number', 'INVALID_ARGS', false);
+        }
+        const retries = parseInt(args[++i], 10);
+        if (isNaN(retries) || retries < 0 || retries > 10) {
+          throw new SummarizerError(
+            'Max retries must be between 0 and 10',
+            'INVALID_ARGS',
+            false
+          );
+        }
+        options.maxRetries = retries;
+        break;
+
+      case '--retry-delay':
+        if (i + 1 >= args.length) {
+          throw new SummarizerError('--retry-delay requires a number', 'INVALID_ARGS', false);
+        }
+        const delay = parseInt(args[++i], 10);
+        if (isNaN(delay) || delay < 100 || delay > 30000) {
+          throw new SummarizerError(
+            'Retry delay must be between 100 and 30000 milliseconds',
+            'INVALID_ARGS',
+            false
+          );
+        }
+        options.retryDelay = delay;
         break;
 
       default:
@@ -658,7 +858,8 @@ Examples:
         } else {
           throw new SummarizerError(
             `Unknown option: ${args[i]}. Use --help for usage information`,
-            'INVALID_ARGS'
+            'INVALID_ARGS',
+            false
           );
         }
     }
@@ -681,7 +882,8 @@ Examples:
     } else {
       throw new SummarizerError(
         'No URL provided. Use --help for usage information',
-        'INVALID_ARGS'
+        'INVALID_ARGS',
+        false
       );
     }
   } catch (error) {
