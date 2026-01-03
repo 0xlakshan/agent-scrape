@@ -1,4 +1,4 @@
-import puppeteer, { Page } from 'puppeteer';
+import puppeteer, { Page, Browser } from 'puppeteer';
 import { BrowserContext, PageMetadata, SummarizerError } from './types';
 import { removeDuplicateLines } from './utils';
 
@@ -6,9 +6,23 @@ const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
 
 export async function createBrowserContext(): Promise<BrowserContext> {
   try {
-    const browser = await puppeteer.launch({ headless: 'new' });
+    const browser = await puppeteer.launch({
+      headless: 'new',
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-accelerated-2d-canvas',
+        '--no-first-run',
+        '--no-zygote',
+        '--disable-gpu'
+      ]
+    });
+
     const page = await browser.newPage();
     await page.setUserAgent(USER_AGENT);
+    await page.setRequestInterception(false);
+    await page.setViewport({ width: 1280, height: 720 });
     return { browser, page };
   } catch (error) {
     throw new SummarizerError(
@@ -23,9 +37,12 @@ export async function withBrowser<T>(
   fn: (ctx: BrowserContext) => Promise<T>
 ): Promise<T> {
   let ctx: BrowserContext | null = null;
+  let browserClosed = false;
+
   try {
     ctx = await createBrowserContext();
-    return await fn(ctx);
+    const result = await fn(ctx);
+    return result;
   } catch (error) {
     if (error instanceof SummarizerError) throw error;
     throw new SummarizerError(
@@ -34,11 +51,32 @@ export async function withBrowser<T>(
       false
     );
   } finally {
-    if (ctx?.browser) {
+    if (ctx) {
       try {
-        await ctx.browser.close();
+        if (ctx.page && !ctx.page.isClosed()) {
+          await ctx.page.close().catch(err =>
+            console.warn('Failed to close page:', err)
+          );
+        }
+
+        if (ctx.browser && ctx.browser.isConnected()) {
+          await ctx.browser.close();
+          browserClosed = true;
+        }
       } catch (error) {
-        console.warn('Failed to close browser:', error);
+        console.warn('Failed to close browser gracefully:', error);
+
+        if (!browserClosed && ctx.browser) {
+          try {
+            const process = ctx.browser.process();
+            if (process && !process.killed) {
+              process.kill('SIGKILL');
+              console.warn('Browser process force killed');
+            }
+          } catch (killError) {
+            console.warn('Failed to force kill browser:', killError);
+          }
+        }
       }
     }
   }
@@ -46,6 +84,20 @@ export async function withBrowser<T>(
 
 export async function navigate(page: Page, url: string): Promise<void> {
   try {
+    try {
+      await page.evaluate(() => {
+        if (window.stop) window.stop();
+
+        try {
+          localStorage.clear();
+          sessionStorage.clear();
+        } catch (e) {
+        }
+      });
+    } catch (clearError) {
+      console.warn('Could not clear page state before navigation:', clearError);
+    }
+
     const response = await page.goto(url, {
       waitUntil: 'networkidle0',
       timeout: 60000,
@@ -201,5 +253,31 @@ export async function extractAndCleanText(page: Page): Promise<string> {
       'TEXT_EXTRACTION_FAILED',
       true
     );
+  }
+}
+
+export async function cleanupPageResources(page: Page): Promise<void> {
+  try {
+    if (page.isClosed()) {
+      return;
+    }
+
+    const client = await page.target().createCDPSession();
+
+    try {
+      await Promise.all([
+        client.send('Network.clearBrowserCookies'),
+        client.send('Network.clearBrowserCache'),
+      ]);
+    } finally {
+      await client.detach();
+    }
+
+    await page.evaluate(() => {
+      if (window.stop) window.stop();
+    });
+
+  } catch (error) {
+    console.warn('Warning: Could not fully cleanup page resources:', error);
   }
 }

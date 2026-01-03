@@ -32,6 +32,15 @@ async function processUrl(
       } catch (error) {
         retries++;
         throw error;
+      } finally {
+        try {
+          const client = await ctx.page.target().createCDPSession();
+          await client.send('Network.clearBrowserCookies');
+          await client.send('Network.clearBrowserCache');
+          await client.detach();
+        } catch (cleanupError) {
+          console.warn('Warning: Failed to clear browser cache/cookies:', cleanupError);
+        }
       }
     },
     {
@@ -105,7 +114,9 @@ async function summarizeWebsite(url: string, options: SummaryOptions = {}) {
         const result = await processUrl(link, { ...options, includeMetadata: true }, { browser, page });
         linkResults.push(result);
 
-        await sleep(1000);
+        if (i < linksToProcess.length - 1) {
+          await sleep(1000);
+        }
       }
 
       const batchOutput = formatBatchOutput(linkResults);
@@ -123,6 +134,7 @@ async function summarizeWebsite(url: string, options: SummaryOptions = {}) {
 
 async function summarizeBatch(urls: string[], options: SummaryOptions = {}) {
   const results: BatchResult[] = [];
+  let processedCount = 0;
 
   await withBrowser(async (ctx) => {
     for (let i = 0; i < urls.length; i++) {
@@ -139,17 +151,45 @@ async function summarizeBatch(urls: string[], options: SummaryOptions = {}) {
         continue;
       }
 
-      const result = await processUrl(url, options, ctx);
-      results.push(result);
+      try {
+        const result = await processUrl(url, options, ctx);
+        results.push(result);
+        processedCount++;
 
-      await sleep(1000);
+        if (i < urls.length - 1) {
+          await sleep(1000);
+        }
+
+        if (processedCount > 0 && processedCount % 10 === 0 && i < urls.length - 1) {
+          console.log('\n🔄 Refreshing browser page to free memory...');
+          try {
+            await ctx.page.close();
+            ctx.page = await ctx.browser.newPage();
+            await ctx.page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36');
+          } catch (refreshError) {
+            console.warn('Warning: Failed to refresh page, continuing with existing page:', refreshError);
+          }
+        }
+      } catch (error) {
+        console.error(`Unexpected error processing ${url}:`, error);
+        results.push({
+          url,
+          summary: '',
+          metadata: { title: '', description: '', url, timestamp: new Date().toISOString() },
+          error: error instanceof Error ? error.message : 'Unexpected error occurred',
+        });
+      }
     }
   });
 
   let comparativeSummary: string | undefined;
   if (options.comparative && results.filter(r => !r.error).length >= 2) {
     console.log('\n🔄 Generating comparative analysis...\n');
-    comparativeSummary = await generateComparativeSummary(results.filter(r => !r.error), options);
+    try {
+      comparativeSummary = await generateComparativeSummary(results.filter(r => !r.error), options);
+    } catch (error) {
+      console.error('Failed to generate comparative summary:', error);
+    }
   }
 
   const output = formatBatchOutput(results, comparativeSummary);
