@@ -8,7 +8,7 @@ const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
 export async function createBrowserContext(): Promise<BrowserContext> {
   try {
     const browser = await puppeteer.launch({
-      headless: 'new',
+      headless: true,
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
@@ -224,7 +224,7 @@ export async function extractAndCleanText(page: Page): Promise<string> {
       for (const selector of CANDIDATES) {
         const el = document.querySelector(selector);
         if (!el) continue;
-        const text = el.innerText.trim();
+        const text = (el as HTMLElement).innerText.trim();
         if (text.length > best.length) best = text;
       }
 

@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import { SummaryOptions, BatchResult, BrowserContext, SummarizerError, PageMetadata } from './types';
 import { isValidUrl, retryWithBackoff, sleep } from './utils';
 import { withBrowser, navigate, extractAndCleanText, extractMetadata, extractLinks } from './browser';
@@ -5,6 +6,7 @@ import { summarizeContent, generateComparativeSummary } from './ai';
 import { formatOutput, formatBatchOutput, saveToFileIfNeeded, loadUrlsFromFile } from './output';
 import { PluginManager, SentimentAnalyzer, KeywordExtractor, ReadabilityScorer } from './plugins';
 import { CONFIG } from './config';
+import { Page } from 'puppeteer';
 
 const pluginManager = new PluginManager();
 pluginManager.register(new SentimentAnalyzer());
@@ -33,19 +35,19 @@ async function processPlugins(
 ): Promise<{ analysis: Record<string, any>; tags: string[] }> {
   const processors = pluginNames
     .map(name => pluginManager.getProcessor(name))
-    .filter(Boolean);
+    .filter((p): p is Exclude<typeof p, undefined> => Boolean(p));
   
   const results = await Promise.allSettled(
     processors.map(processor => processor.process(content, metadata))
   );
   
-  return results.reduce((acc, result, index) => {
+  return results.reduce((acc: { analysis: Record<string, any>; tags: string[] }, result, index) => {
     if (result.status === 'fulfilled') {
       const processor = processors[index];
-      if (result.value.analysis) {
+      if (processor && result.value.analysis) {
         acc.analysis[processor.name] = result.value.analysis;
       }
-      if (result.value.tags) {
+      if (processor && result.value.tags && Array.isArray(result.value.tags)) {
         acc.tags.push(...result.value.tags);
       }
     }
@@ -59,6 +61,7 @@ async function processUrl(
   ctx: BrowserContext
 ): Promise<BatchResult> {
   let retries = 0;
+  const startTime = Date.now();
 
   return retryWithBackoff(
     async () => {
@@ -81,6 +84,12 @@ async function processUrl(
           tags = pluginResults.tags;
         }
 
+        const processingTime = Date.now() - startTime;
+        const output = formatOutput(summary, { text, metadata, links: [] }, options, processingTime, analysis, tags);
+        console.log(output);
+        
+        await saveToFileIfNeeded(output, options);
+
         return {
           url,
           summary,
@@ -88,6 +97,7 @@ async function processUrl(
           analysis: Object.keys(analysis).length > 0 ? analysis : undefined,
           tags: tags.length > 0 ? [...new Set(tags)] : undefined,
           retries: retries > 0 ? retries : undefined,
+          processingTime,
         };
       } catch (error) {
         retries++;
@@ -107,6 +117,7 @@ async function processUrl(
     metadata: { title: '', description: '', url, timestamp: new Date().toISOString() },
     error: error instanceof Error ? error.message : 'Unknown error',
     retries: retries > 0 ? retries : undefined,
+    processingTime: Date.now() - startTime,
   }));
 }
 
@@ -118,6 +129,8 @@ async function summarizeWebsite(url: string, options: SummaryOptions = {}) {
       false
     );
   }
+
+  const pageStartTime = Date.now();
 
   await withBrowser(async ({ browser, page }) => {
     await retryWithBackoff(
@@ -151,7 +164,18 @@ async function summarizeWebsite(url: string, options: SummaryOptions = {}) {
     const links = options.followLinks ? await extractLinks(page, url) : [];
 
     const summary = await summarizeContent(text, options);
-    const output = formatOutput(summary, { text, metadata, links }, options);
+
+    let analysis: Record<string, any> = {};
+    let tags: string[] = [];
+
+    if (options.plugins && options.plugins.length > 0) {
+      const pluginResults = await processPlugins(text, metadata, options.plugins);
+      analysis = pluginResults.analysis;
+      tags = pluginResults.tags;
+    }
+
+    const processingTime = Date.now() - pageStartTime;
+    const output = formatOutput(summary, { text, metadata, links }, options, processingTime, analysis, tags);
     console.log(output);
 
     if (options.followLinks && links.length > 0) {
@@ -172,7 +196,8 @@ async function summarizeWebsite(url: string, options: SummaryOptions = {}) {
         }
       }
 
-      const batchOutput = formatBatchOutput(linkResults);
+      const batchTotalTime = Date.now() - pageStartTime;
+      const batchOutput = formatBatchOutput(linkResults, undefined, options, batchTotalTime);
       console.log(batchOutput);
 
       if (options.saveToFile) {
@@ -188,6 +213,7 @@ async function summarizeWebsite(url: string, options: SummaryOptions = {}) {
 async function summarizeBatch(urls: string[], options: SummaryOptions = {}) {
   const results: BatchResult[] = [];
   let processedCount = 0;
+  const batchStartTime = Date.now();
 
   await withBrowser(async (ctx) => {
     for (let i = 0; i < urls.length; i++) {
@@ -200,6 +226,7 @@ async function summarizeBatch(urls: string[], options: SummaryOptions = {}) {
           summary: '',
           metadata: { title: '', description: '', url, timestamp: new Date().toISOString() },
           error: 'Invalid URL format',
+          processingTime: 0,
         });
         continue;
       }
@@ -230,6 +257,7 @@ async function summarizeBatch(urls: string[], options: SummaryOptions = {}) {
           summary: '',
           metadata: { title: '', description: '', url, timestamp: new Date().toISOString() },
           error: error instanceof Error ? error.message : 'Unexpected error occurred',
+          processingTime: 0,
         });
       }
     }
@@ -245,7 +273,8 @@ async function summarizeBatch(urls: string[], options: SummaryOptions = {}) {
     }
   }
 
-  const output = formatBatchOutput(results, comparativeSummary);
+  const batchTotalTime = Date.now() - batchStartTime;
+  const output = formatBatchOutput(results, comparativeSummary, options, batchTotalTime);
   console.log(output);
 
   await saveToFileIfNeeded(output, options);
@@ -261,18 +290,21 @@ Usage: node summarizer.js <url|file> [options]
 Options:
   --length <type>        Summary length: short, medium, long (default: medium)
   --format <type>        Output format: paragraphs, bullets, json (default: paragraphs)
+  --output <type>        Output mode: text, json (default: text) - structured JSON output
   --metadata             Include page metadata
   --save <filename>      Save summary to file
   --batch <file>         Process multiple URLs from a file
   --comparative          Generate comparative analysis (batch mode only)
   --follow <n>           Follow and summarize N internal links from the page
+  --plugins <names>      Enable analysis plugins (comma-separated: sentiment-analyzer,keyword-extractor,readability-scorer)
   --max-retries <n>      Maximum retry attempts for failed requests (default: 3)
   --retry-delay <ms>     Base delay between retries in milliseconds (default: 2000)
   --help                 Show this help message
 
 Examples:
   node summarizer.js https://example.com --length short --metadata
-  node summarizer.js --batch urls.txt --comparative --save report
+  node summarizer.js https://example.com --output json --metadata
+  node summarizer.js --batch urls.txt --comparative --output json --save report
   node summarizer.js https://example.com --follow 5 --max-retries 5
   node summarizer.js https://example.com --retry-delay 3000 --max-retries 2
     `);
@@ -321,6 +353,25 @@ Examples:
           );
         }
         options.format = format as SummaryOptions['format'];
+        break;
+
+      case '--output':
+        if (i + 1 >= args.length) {
+          throw new SummarizerError(
+            '--output requires a value (text or json)',
+            'INVALID_ARGS',
+            false
+          );
+        }
+        const output = args[++i];
+        if (!['text', 'json'].includes(output)) {
+          throw new SummarizerError(
+            `Invalid output: ${output}. Must be text or json`,
+            'INVALID_ARGS',
+            false
+          );
+        }
+        options.outputJson = output === 'json';
         break;
 
       case '--metadata':
@@ -435,6 +486,30 @@ Examples:
   } catch (error) {
     if (error instanceof SummarizerError) {
       console.error(`\n❌ Error [${error.code}]: ${error.message}\n`);
+      
+      // provide helpful suggestions based on error type
+      if (error.code === 'NO_CONTENT') {
+        console.log('Suggestions:');
+        console.log('  - Try a different URL with more static content');
+        console.log('  - Wait a moment and retry (some sites block rapid requests)');
+        console.log('  - Check if the site requires JavaScript (try using --follow)');
+      } else if (error.code === 'RATE_LIMITED') {
+        console.log('Suggestions:');
+        console.log('  - Increase retry delay: --retry-delay 5000');
+        console.log('  - Reduce batch size (process fewer URLs at once)');
+        console.log('  - Wait before retrying (server needs time to recover)');
+      } else if (error.code === 'MAX_RETRIES_EXCEEDED' && error.message.includes('quota')) {
+        console.log('Suggestions:');
+        console.log('  - Check your API quota at: https://ai.google.dev/usage');
+        console.log('  - Upgrade your plan or wait for quota reset');
+        console.log('  - For batch processing: split into smaller files');
+      } else if (error.code === 'MAX_RETRIES_EXCEEDED') {
+        console.log('Suggestions:');
+        console.log('  - Increase max retries: --max-retries 5');
+        console.log('  - Increase retry delay: --retry-delay 3000');
+        console.log('  - Check your internet connection');
+      }
+      console.log();
       process.exit(1);
     }
     console.error('\n❌ Unexpected error:', error);

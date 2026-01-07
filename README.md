@@ -27,16 +27,18 @@
 # Install dependencies
 npm install
 
-export GEMINI_API_KEY="your-api-key-here"
+# Copy the example environment file and add your API key
+cp .env.example .env
+# Then edit .env and add your GOOGLE_GENERATIVE_AI_API_KEY
 
 # Summarize a single page
-node src/index.js https://example.com
+node dist/index.js https://example.com
 
 # Get a short summary with metadata
-node src/index.js https://example.com --length short --metadata
+node dist/index.js https://example.com --length short --metadata
 
 # Process multiple URLs from a file
-node src/index.js --batch urls.txt --comparative
+node dist/index.js --batch urls.txt --comparative
 ```
 
 ## Installation
@@ -44,7 +46,8 @@ node src/index.js --batch urls.txt --comparative
 1. Clone the repository
 2. Install dependencies: `npm install`
 3. Get a Google Gemini API key from [Google AI Studio](https://makersuite.google.com/app/apikey)
-4. Set the environment variable: `export GEMINI_API_KEY="your-key"`
+4. Create a `.env` file: `cp .env.example .env`
+5. Add your API key to the `.env` file: `GOOGLE_GENERATIVE_AI_API_KEY=your-key-here`
 
 ## Usage
 
@@ -52,16 +55,16 @@ node src/index.js --batch urls.txt --comparative
 
 ```bash
 # Simple summary
-node src/index.js https://news.example.com/article
+node dist/index.js https://news.example.com/article
 
 # Custom length and format
-node src/index.js https://blog.example.com --length long --format bullets
+node dist/index.js https://blog.example.com --length long --format bullets
 
 # Include page metadata
-node src/index.js https://docs.example.com --metadata
+node dist/index.js https://docs.example.com --metadata
 
 # Save to file
-node src/index.js https://example.com --save my-summary
+node dist/index.js https://example.com --save my-summary
 ```
 
 ### Batch Processing
@@ -78,26 +81,26 @@ Then process them:
 
 ```bash
 # Basic batch processing
-node src/index.js --batch urls.txt
+node dist/index.js --batch urls.txt
 
 # With comparative analysis
-node src/index.js --batch urls.txt --comparative
+node dist/index.js --batch urls.txt --comparative
 
 # Save results
-node src/index.js --batch urls.txt --comparative --save batch-report
+node dist/index.js --batch urls.txt --comparative --save batch-report
 ```
 
 ### Advanced Features
 
 ```bash
 # Follow internal links (up to 5)
-node src/index.js https://example.com --follow 5
+node dist/index.js https://example.com --follow 5
 
 # Use content analysis plugins
-node src/index.js https://example.com --plugins sentiment-analyzer,keyword-extractor
+node dist/index.js https://example.com --plugins sentiment-analyzer,keyword-extractor
 
 # Custom retry settings
-node src/index.js https://example.com --max-retries 5 --retry-delay 3000
+node dist/index.js https://example.com --max-retries 5 --retry-delay 3000
 ```
 
 ## Command Line Options
@@ -114,16 +117,61 @@ node src/index.js https://example.com --max-retries 5 --retry-delay 3000
 | `--plugins` | Enable analysis plugins | `--plugins sentiment-analyzer,keywords` |
 | `--max-retries` | Maximum retry attempts (0-10) | `--max-retries 5` |
 | `--retry-delay` | Delay between retries in ms (100-30000) | `--retry-delay 2000` |
+| `--output` | Output format: `text`, `json` | `--output json` |
+
+## Output and File Storage
+
+All summaries are automatically saved to the `summaries/` directory when using the `--save` flag:
+
+```bash
+# Save text summary
+node dist/index.js https://example.com --save my-summary
+# Creates: summaries/my-summary.txt
+
+# Save JSON output
+node dist/index.js https://example.com --output json --save my-summary
+# Creates: summaries/my-summary.json
+
+# Save batch results
+node dist/index.js --batch urls.txt --save batch-results
+# Creates: summaries/batch-results.txt
+```
+
+The `summaries/` directory is created automatically if it doesn't exist. File extension (`.txt` or `.json`) is added automatically based on the output format.
 
 ## Available Plugins
 
-- **sentiment-analyzer**: Analyzes emotional tone of content
-- **keyword-extractor**: Extracts key terms and phrases
-- **readability-scorer**: Calculates reading difficulty scores
+Plugins enable additional content analysis beyond basic summarization:
+
+- **sentiment-analyzer**: Analyzes emotional tone and sentiment of content
+  - Returns: sentiment (positive/negative/neutral), score, word counts
+  
+- **keyword-extractor**: Extracts and ranks the most important keywords
+  - Returns: top keywords with frequency scores, total/unique word counts
+  
+- **readability-scorer**: Measures reading difficulty and complexity
+  - Returns: readability scores, estimated reading time, complexity level
+
+### Using Plugins
+
+```bash
+# Single plugin
+node dist/index.js https://example.com --plugins sentiment-analyzer
+
+# Multiple plugins (comma-separated)
+node dist/index.js https://example.com --plugins sentiment-analyzer,keyword-extractor,readability-scorer
+
+# With JSON output to see full analysis
+node dist/index.js https://example.com --plugins keyword-extractor --output json
+```
+
+Plugin results are displayed in the output:
+- **Text output**: Shows under "=== Plugin Analysis ===" section
+- **JSON output**: Included in the `analysis` and `tags` fields
 
 ## Output Examples
 
-### Standard Summary
+### Text Output
 ```
 --- Website Summary ---
 
@@ -133,39 +181,59 @@ Date: 1/7/2026, 10:30:00 PM
 
 This article discusses the latest developments in web scraping technology...
 
+=== Plugin Analysis ===
+
+sentiment-analyzer:
+{
+  "sentiment": "positive",
+  "score": 0.8,
+  "positiveWords": 15,
+  "negativeWords": 2
+}
+
+Tags: positive
+
 -----------------------
 ```
 
-### JSON Format
+### JSON Output Format
 ```json
 {
-  "mainTopic": "Web scraping with AI",
-  "keyPoints": ["Automated content extraction", "AI summarization", "Batch processing"],
-  "conclusion": "Modern tools make web scraping more accessible and intelligent"
+  "url": "https://example.com",
+  "timestamp": "2026-01-07T20:15:30.123Z",
+  "processingTime": 5234,
+  "metadata": {
+    "title": "Example Article",
+    "description": "Article description here",
+    "contentLength": 2500
+  },
+  "summary": {
+    "content": "The article discusses...",
+    "length": "short",
+    "keyPoints": [
+      "First key point from summary",
+      "Second key point from summary"
+    ]
+  },
+  "analysis": {
+    "sentiment-analyzer": {
+      "sentiment": "positive",
+      "score": 0.8,
+      "positiveWords": 15,
+      "negativeWords": 2
+    },
+    "keyword-extractor": {
+      "keywords": [
+        {"word": "technology", "count": 12, "frequency": 0.048},
+        {"word": "development", "count": 8, "frequency": 0.032}
+      ],
+      "totalWords": 2500,
+      "uniqueWords": 850
+    }
+  },
+  "tags": ["technology", "development", "positive"],
+  "status": "success"
 }
-```
-
-### Batch Results with Analysis
-```
-=== BATCH SUMMARY RESULTS ===
-
-Total URLs processed: 3
-Successful: 3
-Failed: 0
-
---- Summary 1 ---
-URL: https://example.com/page1
-Title: First Article
-Analysis: {
-  "sentiment-analyzer": {"sentiment": "positive", "score": 0.7},
-  "keyword-extractor": {"keywords": [{"word": "technology", "count": 15}]}
-}
-
-Summary content here...
-
-=== COMPARATIVE ANALYSIS ===
-
-All three articles share common themes around technology adoption...
 ```
 
 ## Configuration
