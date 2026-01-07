@@ -486,6 +486,30 @@ Examples:
   } catch (error) {
     if (error instanceof SummarizerError) {
       console.error(`\n❌ Error [${error.code}]: ${error.message}\n`);
+      
+      // provide helpful suggestions based on error type
+      if (error.code === 'NO_CONTENT') {
+        console.log('Suggestions:');
+        console.log('  - Try a different URL with more static content');
+        console.log('  - Wait a moment and retry (some sites block rapid requests)');
+        console.log('  - Check if the site requires JavaScript (try using --follow)');
+      } else if (error.code === 'RATE_LIMITED') {
+        console.log('Suggestions:');
+        console.log('  - Increase retry delay: --retry-delay 5000');
+        console.log('  - Reduce batch size (process fewer URLs at once)');
+        console.log('  - Wait before retrying (server needs time to recover)');
+      } else if (error.code === 'MAX_RETRIES_EXCEEDED' && error.message.includes('quota')) {
+        console.log('Suggestions:');
+        console.log('  - Check your API quota at: https://ai.google.dev/usage');
+        console.log('  - Upgrade your plan or wait for quota reset');
+        console.log('  - For batch processing: split into smaller files');
+      } else if (error.code === 'MAX_RETRIES_EXCEEDED') {
+        console.log('Suggestions:');
+        console.log('  - Increase max retries: --max-retries 5');
+        console.log('  - Increase retry delay: --retry-delay 3000');
+        console.log('  - Check your internet connection');
+      }
+      console.log();
       process.exit(1);
     }
     console.error('\n❌ Unexpected error:', error);
