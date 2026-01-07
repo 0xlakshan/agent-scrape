@@ -13,6 +13,7 @@ export type SummaryOptions = {
   followLinks?: number;
   maxRetries?: number;
   retryDelay?: number;
+  plugins?: string[];
 };
 
 export type PageMetadata = {
@@ -32,6 +33,8 @@ export type BatchResult = {
   url: string;
   summary: string;
   metadata: PageMetadata;
+  analysis?: Record<string, any>;
+  tags?: string[];
   error?: string;
   retries?: number;
 };

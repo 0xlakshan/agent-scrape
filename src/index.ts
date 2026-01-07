@@ -3,6 +3,12 @@ import { isValidUrl, retryWithBackoff, sleep } from './utils';
 import { withBrowser, navigate, extractAndCleanText, extractMetadata, extractLinks } from './browser';
 import { summarizeContent, generateComparativeSummary } from './ai';
 import { formatOutput, formatBatchOutput, saveToFileIfNeeded, loadUrlsFromFile } from './output';
+import { PluginManager, SentimentAnalyzer, KeywordExtractor, ReadabilityScorer } from './plugins';
+
+const pluginManager = new PluginManager();
+pluginManager.register(new SentimentAnalyzer());
+pluginManager.register(new KeywordExtractor());
+pluginManager.register(new ReadabilityScorer());
 
 async function processUrl(
   url: string,
@@ -23,10 +29,34 @@ async function processUrl(
 
         const summary = await summarizeContent(text, options);
 
+        let analysis: Record<string, any> = {};
+        let tags: string[] = [];
+
+        if (options.plugins && options.plugins.length > 0) {
+          for (const pluginName of options.plugins) {
+            const processor = pluginManager.getProcessor(pluginName);
+            if (processor) {
+              try {
+                const result = await processor.process(text, metadata);
+                if (result.analysis) {
+                  analysis[processor.name] = result.analysis;
+                }
+                if (result.tags) {
+                  tags.push(...result.tags);
+                }
+              } catch (pluginError) {
+                console.warn(`Plugin ${pluginName} failed:`, pluginError);
+              }
+            }
+          }
+        }
+
         return {
           url,
           summary,
           metadata,
+          analysis: Object.keys(analysis).length > 0 ? analysis : undefined,
+          tags: tags.length > 0 ? [...new Set(tags)] : undefined,
           retries: retries > 0 ? retries : undefined,
         };
       } catch (error) {
@@ -336,6 +366,13 @@ Examples:
           );
         }
         options.retryDelay = delay;
+        break;
+
+      case '--plugins':
+        if (i + 1 >= args.length) {
+          throw new SummarizerError('--plugins requires plugin names', 'INVALID_ARGS', false);
+        }
+        options.plugins = args[++i].split(',').map(p => p.trim());
         break;
 
       default:
