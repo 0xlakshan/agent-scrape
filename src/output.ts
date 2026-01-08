@@ -1,12 +1,21 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { PageContent, SummaryOptions, BatchResult, SummarizerError } from './types';
+import { formatJsonSingle, formatJsonBatch } from './json-output';
 
 export function formatOutput(
   summary: string,
   data: PageContent,
-  options: SummaryOptions
+  options: SummaryOptions,
+  processingTime: number = 0,
+  error?: string,
+  retries?: number
 ): string {
+  if (options.format === 'json') {
+    const jsonResult = formatJsonSingle(summary, data, options, processingTime, error, retries);
+    return JSON.stringify(jsonResult, null, 2);
+  }
+
   let output = '\n--- Website Summary ---\n\n';
 
   if (options.includeMetadata) {
@@ -26,6 +35,14 @@ export function formatOutput(
 }
 
 export function formatBatchOutput(results: BatchResult[], comparative?: string): string {
+  // Check if JSON format should be used (detect from first result with plugins)
+  const hasJsonFormat = results.some(r => r.analysis && typeof r.analysis === 'object');
+  
+  if (hasJsonFormat) {
+    const jsonResult = formatJsonBatch(results, comparative);
+    return JSON.stringify(jsonResult, null, 2);
+  }
+
   let output = '\n=== BATCH SUMMARY RESULTS ===\n\n';
   output += `Total URLs processed: ${results.length}\n`;
   output += `Successful: ${results.filter(r => !r.error).length}\n`;

@@ -119,6 +119,8 @@ async function summarizeWebsite(url: string, options: SummaryOptions = {}) {
     );
   }
 
+  const startTime = Date.now();
+
   await withBrowser(async ({ browser, page }) => {
     await retryWithBackoff(
       async () => navigate(page, url),
@@ -151,7 +153,8 @@ async function summarizeWebsite(url: string, options: SummaryOptions = {}) {
     const links = options.followLinks ? await extractLinks(page, url) : [];
 
     const summary = await summarizeContent(text, options);
-    const output = formatOutput(summary, { text, metadata, links }, options);
+    const processingTime = (Date.now() - startTime) / 1000;
+    const output = formatOutput(summary, { text, metadata, links }, options, processingTime);
     console.log(output);
 
     if (options.followLinks && links.length > 0) {
