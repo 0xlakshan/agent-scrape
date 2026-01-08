@@ -100,6 +100,28 @@ node src/index.js https://example.com --plugins sentiment-analyzer,keyword-extra
 node src/index.js https://example.com --max-retries 5 --retry-delay 3000
 ```
 
+## JSON Output Format
+
+Scrape AI provides comprehensive JSON output for easy integration with other applications, APIs, and development workflows.
+
+### Benefits
+- **CI/CD Integration**: Structured data perfect for automated pipelines
+- **Analytics & Reporting**: Consistent schema for data analysis
+- **API-like Responses**: Standardized format with status codes and error handling
+- **Processing Metrics**: Detailed timing and performance data
+
+### Usage
+```bash
+# Single URL with JSON output
+node src/index.js https://example.com --format json
+
+# Batch processing with plugins (auto-detects JSON format)
+node src/index.js --batch urls.txt --plugins sentiment-analyzer,keyword-extractor
+
+# Save JSON results to file
+node src/index.js https://example.com --format json --save results.json
+```
+
 ## Command Line Options
 
 | Option | Description | Example |
@@ -139,33 +161,64 @@ This article discusses the latest developments in web scraping technology...
 ### JSON Format
 ```json
 {
-  "mainTopic": "Web scraping with AI",
-  "keyPoints": ["Automated content extraction", "AI summarization", "Batch processing"],
-  "conclusion": "Modern tools make web scraping more accessible and intelligent"
+  "url": "https://example.com",
+  "timestamp": "2026-01-07T23:21:20.159Z",
+  "metadata": {
+    "title": "Page Title",
+    "description": "Meta description",
+    "contentLength": 1234,
+    "processingTime": 2.5
+  },
+  "summary": {
+    "content": "AI-generated summary",
+    "length": "medium",
+    "keyPoints": ["point1", "point2"]
+  },
+  "plugins": {
+    "sentiment-analyzer": {"sentiment": "positive", "score": 0.7},
+    "keyword-extractor": {"keywords": [{"word": "tech", "count": 5}]}
+  },
+  "status": "success"
 }
 ```
 
 ### Batch Results with Analysis
-```
-=== BATCH SUMMARY RESULTS ===
-
-Total URLs processed: 3
-Successful: 3
-Failed: 0
-
---- Summary 1 ---
-URL: https://example.com/page1
-Title: First Article
-Analysis: {
-  "sentiment-analyzer": {"sentiment": "positive", "score": 0.7},
-  "keyword-extractor": {"keywords": [{"word": "technology", "count": 15}]}
+```json
+{
+  "batchId": "550e8400-e29b-41d4-a716-446655440000",
+  "timestamp": "2026-01-07T23:21:20.159Z",
+  "summary": {
+    "total": 3,
+    "successful": 3,
+    "failed": 0
+  },
+  "results": [
+    {
+      "url": "https://example.com/page1",
+      "timestamp": "2026-01-07T23:21:20.159Z",
+      "metadata": {
+        "title": "First Article",
+        "description": "Article description",
+        "contentLength": 2500,
+        "processingTime": 3.2
+      },
+      "summary": {
+        "content": "Summary content here...",
+        "length": "medium",
+        "keyPoints": ["key point 1", "key point 2"]
+      },
+      "plugins": {
+        "sentiment-analyzer": {"sentiment": "positive", "score": 0.7},
+        "keyword-extractor": {"keywords": [{"word": "technology", "count": 15}]}
+      },
+      "status": "success"
+    }
+  ],
+  "comparative": {
+    "commonThemes": ["technology", "innovation", "development"],
+    "analysis": "All three articles share common themes around technology adoption..."
+  }
 }
-
-Summary content here...
-
-=== COMPARATIVE ANALYSIS ===
-
-All three articles share common themes around technology adoption...
 ```
 
 ## Configuration
