@@ -1,28 +1,42 @@
 {
-  "name": "agent-scrape",
-  "version": "1.0.0",
-  "description": "A simple CLI tool that uses **Puppeteer** and **Google Gemini** to summarize web pages.   It loads a page, extracts the main content, cleans out noise, and generates a concise AI summary.",
-  "main": "index.js",
+  "name": "scrape-kit",
+  "version": "0.1.0",
+  "description": "TypeScript web scraping SDK with AI-powered transformation",
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": ["dist"],
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "build": "tsup src/index.ts --format cjs,esm --dts",
+    "dev": "tsup src/index.ts --format cjs,esm --dts --watch"
   },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/0xlakshan/agent-scrape.git"
-  },
-  "keywords": [],
-  "author": "lakshan",
-  "license": "ISC",
-  "type": "commonjs",
-  "bugs": {
-    "url": "https://github.com/0xlakshan/agent-scrape/issues"
-  },
-  "homepage": "https://github.com/0xlakshan/agent-scrape#readme",
+  "keywords": ["scraping", "ai", "puppeteer", "firecrawl", "sdk"],
+  "author": "Lakshan Perera",
+  "license": "MIT",
   "dependencies": {
-    "@ai-sdk/google": "^3.0.1",
-    "@types/uuid": "^10.0.0",
     "ai": "^6.0.3",
-    "puppeteer": "^24.34.0",
-    "uuid": "^13.0.0"
+    "puppeteer": "^24.34.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.0.0"
+  },
+  "peerDependencies": {
+    "@ai-sdk/google": "^3.0.0",
+    "@ai-sdk/openai": "^1.0.0",
+    "@ai-sdk/anthropic": "^1.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@ai-sdk/google": { "optional": true },
+    "@ai-sdk/openai": { "optional": true },
+    "@ai-sdk/anthropic": { "optional": true }
   }
 }

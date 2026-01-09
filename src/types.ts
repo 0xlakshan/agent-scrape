@@ -1,59 +1,59 @@
-export type BrowserContext = {
-  browser: import('puppeteer').Browser;
-  page: import('puppeteer').Page;
-};
+import type { LanguageModelV1 } from 'ai';
 
-export type SummaryOptions = {
-  length?: 'short' | 'medium' | 'long';
-  format?: 'paragraphs' | 'bullets' | 'json';
-  includeMetadata?: boolean;
-  saveToFile?: string;
-  batch?: boolean;
-  comparative?: boolean;
-  followLinks?: number;
-  maxRetries?: number;
-  retryDelay?: number;
-  plugins?: string[];
-};
+export type OutputFormat = 'markdown' | 'json' | 'text' | 'html';
+export type ScrapingEngine = 'puppeteer' | 'firecrawl';
+export type AIMode = 'stream' | 'generate';
 
-export type PageMetadata = {
+export interface RetryConfig {
+  attempts?: number;
+  delay?: number;
+  backoff?: 'linear' | 'exponential';
+}
+
+export interface ScrapeOptions {
+  output?: OutputFormat;
+  model?: LanguageModelV1;
+  aiMode?: AIMode;
+  schema?: Record<string, unknown>;
+  selectors?: string[];
+  postProcess?: (data: ScrapedData) => ScrapedData | Promise<ScrapedData>;
+}
+
+export interface ScrapedData {
+  url: string;
+  content: string;
+  format: OutputFormat;
+  metadata: PageMetadata;
+  structured?: Record<string, unknown>;
+}
+
+export interface PageMetadata {
   title: string;
   description: string;
-  url: string;
   timestamp: string;
-};
+}
 
-export type PageContent = {
+export interface EngineOptions {
+  selectors?: string[];
+  waitFor?: string;
+  timeout?: number;
+}
+
+export interface RawContent {
+  html: string;
   text: string;
   metadata: PageMetadata;
-  links?: string[];
-};
+}
 
-export type BatchResult = {
-  url: string;
-  summary: string;
-  metadata: PageMetadata;
-  analysis?: Record<string, any>;
-  tags?: string[];
-  error?: string;
-  retries?: number;
-};
+export interface ScraperConfig {
+  engine?: ScrapingEngine;
+  model?: LanguageModelV1;
+  output?: OutputFormat;
+  firecrawl?: { apiKey: string };
+  retry?: RetryConfig;
+}
 
-export type ContentChunk = {
-  content: string;
-  index: number;
-  total: number;
-  startChar: number;
-  endChar: number;
-};
-
-export class SummarizerError extends Error {
-  constructor(
-    message: string,
-    public readonly code: string,
-    public readonly retryable: boolean = false
-  ) {
-    super(message);
-    this.name = 'SummarizerError';
-  }
+export abstract class Engine {
+  abstract scrape(url: string, options?: EngineOptions): Promise<RawContent>;
+  abstract dispose(): Promise<void>;
 }
