@@ -1,4 +1,6 @@
-import { Engine, type EngineOptions, type RawContent } from '../types';
+import { Engine } from '../engine';
+import type { EngineOptions, RawContent } from '../types';
+import { EngineError } from '../errors';
 
 export class FirecrawlEngine extends Engine {
   constructor(private apiKey: string) {
@@ -13,7 +15,7 @@ export class FirecrawlEngine extends Engine {
     });
 
     if (!response.ok) {
-      throw new Error(`Firecrawl error: ${response.status} ${response.statusText}`);
+      throw new EngineError(`Firecrawl error: ${response.status} ${response.statusText}`);
     }
 
     const { data } = await response.json();
