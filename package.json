@@ -16,9 +16,9 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsup src/index.ts --format cjs,esm --dts",
-    "dev": "tsup src/index.ts --format cjs,esm --dts --watch",
-    "serve": "tsx src/api.ts",
+    "build": "tsup packages/sdk/index.ts --format cjs,esm --dts",
+    "dev": "tsup packages/sdk/index.ts --format cjs,esm --dts --watch",
+    "serve": "tsx packages/api/index.ts",
     "postinstall": "npx playwright install chromium",
     "test": "vitest",
     "test:coverage": "vitest --coverage"

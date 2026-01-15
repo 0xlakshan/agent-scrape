@@ -80,7 +80,7 @@ export class Scraper {
     const raw = await this.withRetry(() => this.fetchScrape(url, options));
 
     const model = options.model ?? this.config.model;
-    const format = options.output ?? this.config.output ?? "text";
+    const format = options.output ?? this.config.output ?? "html";
     const transformer = new Transformer(model);
 
     const transformed = await transformer.transform(raw, format, {
