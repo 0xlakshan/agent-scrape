@@ -11,7 +11,6 @@ export {
 export type {
   ScrapeOptions,
   ScrapedData,
-  ScraperConfig,
   OutputFormat,
   AIMode,
   PageMetadata,

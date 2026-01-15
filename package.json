@@ -7,20 +7,28 @@
   "types": "dist/index.d.ts",
   "exports": {
     ".": {
+      "types": "./dist/index.d.ts",
       "import": "./dist/index.mjs",
-      "require": "./dist/index.js",
-      "types": "./dist/index.d.ts"
+      "require": "./dist/index.js"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsup src/index.ts --format cjs,esm --dts",
     "dev": "tsup src/index.ts --format cjs,esm --dts --watch",
     "serve": "tsx src/api.ts",
+    "postinstall": "npx playwright install chromium",
     "test": "vitest",
     "test:coverage": "vitest --coverage"
   },
-  "keywords": ["scraping", "ai", "playwright", "sdk"],
+  "keywords": [
+    "scraping",
+    "ai",
+    "playwright",
+    "sdk"
+  ],
   "author": "Lakshan Perera",
   "license": "MIT",
   "dependencies": {
@@ -43,8 +51,14 @@
     "@ai-sdk/anthropic": "^1.0.0"
   },
   "peerDependenciesMeta": {
-    "@ai-sdk/google": { "optional": true },
-    "@ai-sdk/openai": { "optional": true },
-    "@ai-sdk/anthropic": { "optional": true }
+    "@ai-sdk/google": {
+      "optional": true
+    },
+    "@ai-sdk/openai": {
+      "optional": true
+    },
+    "@ai-sdk/anthropic": {
+      "optional": true
+    }
   }
 }

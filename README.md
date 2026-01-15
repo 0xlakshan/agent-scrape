@@ -1,7 +1,7 @@
 <p align="center">
 	<h1 align="center"><b>Crawl Inference</b></h1>
 <p align="center">
-The ultimate Web scraping SDK for age of AI, MIT licensed</p>
+Ultimate Web scraping SDK for age of AI, MIT licensed</p>
 <br/>
 </p>
 
@@ -19,7 +19,7 @@ npm install @ai-sdk/openai  # or @ai-sdk/google, @ai-sdk/anthropic
 ```bash
 npm run serve
 # or
-npx tsx node_modules/scrape-kit/dist/api.js
+npx tsx node_modules/crawl-inference/dist/api.js
 ```
 
 ### 3. Use the SDK

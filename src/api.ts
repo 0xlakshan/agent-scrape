@@ -23,7 +23,7 @@ async function closeBrowser() {
 app.get("/health", (_, res) => res.json({ status: "ok" }));
 
 app.post("/scrape", async (req, res) => {
-  const { url, selectors, waitFor, timeout = 30000 } = req.body;
+  const { url, timeout = 30000 } = req.body;
 
   if (!url) return res.status(400).json({ error: "url is required" });
 
@@ -33,39 +33,8 @@ app.post("/scrape", async (req, res) => {
 
     try {
       await page.goto(url, { waitUntil: "networkidle", timeout });
-      if (waitFor) await page.waitForSelector(waitFor, { timeout: 10000 });
-
-      const data = await page.evaluate((sels?: string[]) => {
-        const getMeta = (name: string) =>
-          document
-            .querySelector(`meta[name="${name}"], meta[property="og:${name}"]`)
-            ?.getAttribute("content") || "";
-
-        let text = "";
-        if (sels?.length) {
-          text = sels
-            .map((s) => document.querySelector(s)?.textContent?.trim())
-            .filter(Boolean)
-            .join("\n\n");
-        } else {
-          const main = document.querySelector(
-            'article, main, [role="main"], .content',
-          ) as HTMLElement;
-          text = main?.innerText || document.body.innerText;
-        }
-
-        return {
-          html: document.documentElement.outerHTML,
-          text: text.replace(/\n{3,}/g, "\n\n").trim(),
-          metadata: {
-            title: document.title || getMeta("title"),
-            description: getMeta("description"),
-            timestamp: new Date().toISOString(),
-          },
-        };
-      }, selectors);
-
-      res.json({ success: true, data });
+      const html = await page.content();
+      res.json({ success: true, data: { html } });
     } finally {
       await page.close();
     }
@@ -94,6 +63,7 @@ export function startServer(port = process.env.PORT || 3000) {
 export { app };
 
 // Auto-start when run directly
-if (require.main === module) {
+const isMain = import.meta.url === `file://${process.argv[1]}`;
+if (isMain) {
   startServer();
 }

@@ -1,5 +1,4 @@
 import type {
-  ScraperConfig,
   ScrapeOptions,
   ScrapedData,
   RawContent,
@@ -16,9 +15,9 @@ const DEFAULT_RETRY: RetryConfig = {
 };
 
 export class Scraper {
-  private config: ScraperConfig;
+  private config: ScrapeOptions;
 
-  constructor(config: ScraperConfig = {}) {
+  constructor(config: ScrapeOptions = {}) {
     this.config = config;
   }
 

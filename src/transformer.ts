@@ -1,5 +1,5 @@
 import { generateText, streamText } from "ai";
-import type { LanguageModelV1 } from "ai";
+import type { LanguageModel } from "ai";
 import type { RawContent, OutputFormat, AIMode } from "./types";
 import { TransformError } from "./errors";
 
@@ -23,7 +23,7 @@ export interface TransformedContent {
 }
 
 export class Transformer {
-  constructor(private model?: LanguageModelV1) {}
+  constructor(private model?: LanguageModel) {}
 
   async transform(
     raw: RawContent,
