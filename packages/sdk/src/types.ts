@@ -1,42 +1,19 @@
-import type { LanguageModel } from "ai";
+import type { z } from "zod";
 
-export type OutputFormat = "markdown" | "json" | "text" | "html";
-export type AIMode = "stream" | "generate";
+export type OutputFormat = "json" | "xml";
 
-export interface RetryConfig {
-  attempts?: number;
-  delay?: number;
-  backoff?: "linear" | "exponential";
-}
-
-export interface ScrapeOptions {
+export interface ScrapeOptions<T extends z.ZodType = z.ZodType> {
   output?: OutputFormat;
-  model?: LanguageModel;
-  aiMode?: AIMode;
-  schema?: Record<string, unknown>;
-  selectors?: string[];
-  waitFor?: string;
+  prompt: string;
+  model?: string;
+  schema: T;
+  waitFor?: number;
   timeout?: number;
-  retry?: RetryConfig;
-  postProcess?: (data: ScrapedData) => ScrapedData | Promise<ScrapedData>;
+  postProcess?: (data: z.infer<T>) => z.infer<T> | Promise<z.infer<T>>;
 }
 
-export interface ScrapedData {
+export interface ScrapeResult<T> {
   url: string;
-  content: RawContent;
+  data: T;
   format: OutputFormat;
-  metadata: PageMetadata;
-  structured?: Record<string, unknown>;
-}
-
-export interface PageMetadata {
-  title: string;
-  description: string;
-  timestamp: string;
-}
-
-export interface RawContent {
-  html: string;
-  text: string;
-  metadata: PageMetadata;
 }
