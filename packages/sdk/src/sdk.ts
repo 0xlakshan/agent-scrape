@@ -1,101 +1,41 @@
-import type {
-  ScrapeOptions,
-  ScrapedData,
-  RawContent,
-  RetryConfig,
-} from "./types";
+import type { z } from "zod";
+import { zodToJsonSchema } from "zod-to-json-schema";
+import type { ScrapeOptions, ScrapeResult } from "./types";
 import { EngineError } from "./errors";
 
 const API_URL = process.env.SCRAPE_API_URL || "http://localhost:3000";
-const DEFAULT_RETRY: RetryConfig = {
-  attempts: 3,
-  delay: 1000,
-  backoff: "exponential",
-};
 
 export class Scraper {
-  private config: ScrapeOptions;
+  private defaultModel: string;
 
-  constructor(config: ScrapeOptions = {}) {
-    this.config = config;
+  constructor(config: { model?: string } = {}) {
+    this.defaultModel = config.model ?? "gpt-4";
   }
 
-  private async withRetry<T>(
-    fn: () => Promise<T>,
-    config: RetryConfig = {},
-  ): Promise<T> {
-    const {
-      attempts = DEFAULT_RETRY.attempts!,
-      delay = DEFAULT_RETRY.delay!,
-      backoff = DEFAULT_RETRY.backoff,
-    } = { ...this.config.retry, ...config };
-    let lastError: Error | undefined;
-
-    for (let i = 0; i < attempts; i++) {
-      try {
-        return await fn();
-      } catch (err) {
-        lastError = err as Error;
-        if (i < attempts - 1) {
-          const wait =
-            backoff === "exponential"
-              ? delay * Math.pow(2, i)
-              : delay * (i + 1);
-          await new Promise((r) => setTimeout(r, wait));
-        }
-      }
-    }
-    throw new EngineError(
-      `Failed after ${attempts} attempts: ${lastError?.message}`,
-      lastError,
-    );
-  }
-
-  private async fetchScrape(
+  async scrape<T extends z.ZodType>(
     url: string,
-    options: ScrapeOptions = {},
-  ): Promise<RawContent> {
+    options: ScrapeOptions<T>,
+  ): Promise<ScrapeResult<z.infer<T>>> {
     const res = await fetch(`${API_URL}/scrape`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         url,
-        selectors: options.selectors,
+        prompt: options.prompt,
+        model: options.model ?? this.defaultModel,
+        schema: zodToJsonSchema(options.schema),
+        output: options.output ?? "json",
         waitFor: options.waitFor,
         timeout: options.timeout,
       }),
     });
 
     const json = await res.json();
+    if (!res.ok) throw new EngineError(json.error || `API error: ${res.status}`);
 
-    if (!res.ok) {
-      throw new EngineError(json.error || `API error: ${res.status}`);
-    }
+    let data = options.schema.parse(json.data) as z.infer<T>;
+    if (options.postProcess) data = await options.postProcess(data);
 
-    return json.data;
-  }
-
-  async scrape(url: string, options: ScrapeOptions = {}): Promise<ScrapedData> {
-    const raw = await this.withRetry(() => this.fetchScrape(url, options));
-
-    const model = options.model ?? this.config.model;
-    const format = options.output ?? this.config.output ?? "html";
-
-    let result: ScrapedData = {
-      url,
-      content: raw,
-      format,
-      metadata: raw.metadata,
-    };
-
-    if (options.postProcess) result = await options.postProcess(result);
-    return result;
-  }
-
-  async scrapeBatch(
-    urls: string[],
-    options: ScrapeOptions = {},
-  ): Promise<ScrapedData[]> {
-    return Promise.all(urls.map((url) => this.scrape(url, options)));
+    return { url, data, format: options.output ?? "json" };
   }
 }
