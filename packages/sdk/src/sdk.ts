@@ -31,7 +31,8 @@ export class Scraper {
     });
 
     const json = await res.json();
-    if (!res.ok) throw new EngineError(json.error || `API error: ${res.status}`);
+    if (!res.ok)
+      throw new EngineError(json.error || `API error: ${res.status}`);
 
     let data = options.schema.parse(json.data) as z.infer<T>;
     if (options.postProcess) data = await options.postProcess(data);

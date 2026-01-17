@@ -1,7 +1,7 @@
 import express from "express";
 import { chromium, Browser } from "playwright";
-import { generateObject } from "ai";
-import { openai } from "@ai-sdk/openai";
+import { generateText, Output } from "ai";
+import { google, createGoogleGenerativeAI } from "@ai-sdk/google";
 import { jsonSchema } from "ai";
 
 const app = express();
@@ -23,6 +23,30 @@ async function closeBrowser() {
   }
 }
 
+function cleanHtml(html: string): string {
+  return (
+    html
+      // Remove scripts, styles, comments
+      .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, "")
+      .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, "")
+      .replace(/<!--[\s\S]*?-->/g, "")
+      .replace(/<(svg|path|iframe|noscript)\b[^>]*>[\s\S]*?<\/\1>/gi, "")
+      // Remove common boilerplate sections
+      .replace(/<(header|nav|footer|aside)\b[^>]*>[\s\S]*?<\/\1>/gi, "")
+      // Strip most attributes, keep only semantic ones
+      .replace(
+        /\s+(class|id|style|data-[\w-]+|aria-[\w-]+|role|onclick|on\w+)="[^"]*"/gi,
+        "",
+      )
+      // Remove empty tags
+      .replace(/<(\w+)[^>]*>\s*<\/\1>/gi, "")
+      // Collapse whitespace
+      .replace(/\s+/g, " ")
+      .replace(/>\s+</g, "><")
+      .trim()
+  );
+}
+
 function jsonToXml(obj: unknown, root = "root"): string {
   const convert = (data: unknown, tag: string): string => {
     if (Array.isArray(data)) {
@@ -42,10 +66,20 @@ function jsonToXml(obj: unknown, root = "root"): string {
 app.get("/health", (_, res) => res.json({ status: "ok" }));
 
 app.post("/scrape", async (req, res) => {
-  const { url, prompt, model = "gpt-4", schema, output = "json", waitFor, timeout = 30000 } = req.body;
+  const {
+    url,
+    prompt,
+    model,
+    schema,
+    output = "json",
+    waitFor,
+    timeout = 30000,
+  } = req.body;
 
   if (!url || !prompt || !schema) {
-    return res.status(400).json({ error: "url, prompt, and schema are required" });
+    return res
+      .status(400)
+      .json({ error: "url, prompt, and schema are required" });
   }
 
   try {
@@ -56,18 +90,34 @@ app.post("/scrape", async (req, res) => {
       await page.goto(url, { waitUntil: "networkidle", timeout });
       if (waitFor) await page.waitForTimeout(waitFor);
 
-      const html = await page.content();
+      const html = await page.textContent("body");
 
-      const { object } = await generateObject({
-        model: openai(model),
-        schema: jsonSchema(schema),
-        prompt: `${prompt}\n\nHTML:\n${html}`,
+      // debugging
+      // Write to file for debugging
+      // const fs = await import("fs/promises");
+      // await fs.writeFile("debug-output.txt", html || "", "utf-8");
+      // console.log("Output written to debug-output.txt");
+      // res.json({
+      //   success: true,
+      //   message: "Output written to debug-output.txt",
+      // });
+
+      const cleanedHtml = cleanHtml(html as string);
+
+      const google = createGoogleGenerativeAI({
+        apiKey: process.env.GOOGLE_API_KEY,
+      });
+
+      const result = await generateText({
+        model: google(model),
+        output: Output.object({ schema: jsonSchema(schema) }),
+        prompt: `${prompt}\n\nHTML:\n${cleanedHtml}`,
       });
 
       if (output === "xml") {
-        res.type("application/xml").send(jsonToXml(object, "result"));
+        res.type("application/xml").send(jsonToXml(result, "result"));
       } else {
-        res.json({ success: true, data: object });
+        res.json({ success: true, data: result });
       }
     } finally {
       await page.close();
