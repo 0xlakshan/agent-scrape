@@ -87,15 +87,24 @@ app.post("/scrape", async (req, res) => {
   }
 
   try {
-    const b = await getBrowser();
-    const page = await b.newPage();
+    const browser = await getBrowser();
+    const context = await browser.newContext({
+      userAgent:
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36",
+      viewport: {
+        width: 1280 + Math.floor(Math.random() * 100), // Slight randomness helps reduce fingerprint accuracy
+        height: 720 + Math.floor(Math.random() * 100),
+      },
+      locale: "en-US", // Match with your proxy’s geolocation
+      timezoneId: "America/New_York",
+    });
+    const page = await context.newPage();
 
     try {
-      await page.goto(url, { waitUntil: "networkidle", timeout });
+      await page.goto(url, { waitUntil: "domcontentloaded", timeout });
       if (waitFor) await page.waitForTimeout(waitFor);
 
-      const html = await page.textContent("body");
-
+      const html = await page.content();
       // debugging
       // Write to file for debugging
       // const fs = await import("fs/promises");
