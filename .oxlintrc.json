@@ -1,0 +1,11 @@
+{
+  "rules": {
+    "typescript/no-explicit-any": "warn",
+    "typescript/no-unused-vars": "warn",
+    "import/no-cycle": "error"
+  },
+  "env": {
+    "node": true,
+    "es2022": true
+  }
+}

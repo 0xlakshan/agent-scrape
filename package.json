@@ -21,7 +21,11 @@
     "serve": "tsx packages/api/src/index.ts",
     "postinstall": "npx playwright install chromium",
     "test": "vitest",
-    "test:coverage": "vitest --coverage"
+    "test:coverage": "vitest --coverage",
+    "lint": "oxlint packages",
+    "lint:fix": "oxlint packages --fix",
+    "format": "oxfmt packages",
+    "format:check": "oxfmt packages --check"
   },
   "keywords": [
     "scraping",
@@ -47,6 +51,8 @@
     "@types/express": "^4.17.21",
     "@types/node": "^20.0.0",
     "@vitest/coverage-v8": "^2.0.0",
+    "oxfmt": "^0.25.0",
+    "oxlint": "^1.40.0",
     "tsup": "^8.0.0",
     "tsx": "^4.7.0",
     "typescript": "^5.0.0",
