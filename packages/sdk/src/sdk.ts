@@ -1,16 +1,17 @@
 import type { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
-import type { ScrapeOptions, ScrapeResult, TokenUsageOptions, TokenUsageResult } from "./types";
+import type {
+  ScrapeOptions,
+  ScrapeResult,
+  TokenUsageOptions,
+  TokenUsageResult,
+} from "./types";
 import { EngineError } from "./errors";
 
 const API_URL = process.env.SCRAPE_API_URL || "http://localhost:3000";
 
 export class Scraper {
-  private defaultModel: string;
-
-  constructor(config: { model?: string } = {}) {
-    this.defaultModel = config.model ?? "gpt-4";
-  }
+  constructor() {}
 
   async scrape<T extends z.ZodType>(
     url: string,
@@ -22,7 +23,7 @@ export class Scraper {
       body: JSON.stringify({
         url,
         prompt: options.prompt,
-        model: options.model ?? this.defaultModel,
+        model: options.model,
         schema: zodToJsonSchema(options.schema),
         output: options.output ?? "json",
         waitFor: options.waitFor,
@@ -50,7 +51,7 @@ export class Scraper {
       body: JSON.stringify({
         url,
         prompt: options.prompt,
-        model: options.model ?? this.defaultModel,
+        model: options.model,
         schema: zodToJsonSchema(options.schema),
         waitFor: options.waitFor,
         timeout: options.timeout,

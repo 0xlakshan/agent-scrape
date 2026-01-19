@@ -18,7 +18,7 @@
   "scripts": {
     "build": "tsup packages/sdk/src/index.ts --format cjs,esm --dts",
     "dev": "tsup packages/sdk/src/index.ts --format cjs,esm --dts --watch",
-    "serve": "tsx packages/api/index.ts",
+    "serve": "tsx packages/api/src/index.ts",
     "postinstall": "npx playwright install chromium",
     "test": "vitest",
     "test:coverage": "vitest --coverage"
