@@ -1,7 +1,7 @@
 <p align="center">
 	<h1 align="center"><b>Crawl Inference</b></h1>
 <p align="center">
-AI powered web scraping SDK with structured output</p>
+Ultimate Web scraping Infrastructure for age of AI, MIT licensed</p>
 </p>
 
 > ⚠️ This repo is still in early development, so you may run into bugs.  
